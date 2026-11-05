@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="urn:com.workday/bsvc"
+           xmlns:wd="urn:com.workday/bsvc"
+           elementFormDefault="qualified">
+
+    <xs:element name="Report_Data">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="Report_Entry" maxOccurs="unbounded">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="Employee_Status" type="xs:string"/>
+                            <xs:element name="Worker">
+                                <xs:complexType>
+                                    <xs:sequence>
+                                        <xs:element name="Employee_ID" type="xs:string"/>
+                                        <xs:element name="Personal_Data">
+                                            <xs:complexType>
+                                                <xs:sequence>
+                                                    <xs:element name="First_Name" type="xs:string"/>
+                                                    <xs:element name="Last_Name" type="xs:string"/>
+                                                    <xs:element name="Primary_Work_Email" type="xs:string"/>
+                                                </xs:sequence>
+                                            </xs:complexType>
+                                        </xs:element>
+                                        <xs:element name="Position_Data">
+                                            <xs:complexType>
+                                                <xs:sequence>
+                                                    <xs:element name="Cost_Center_Reference_ID" type="xs:string"/>
+                                                    <xs:element name="Company_Reference_ID" type="xs:string"/>
+                                                </xs:sequence>
+                                            </xs:complexType>
+                                        </xs:element>
+                                        <xs:element name="Compensation_Data">
+                                            <xs:complexType>
+                                                <xs:sequence>
+                                                    <xs:element name="Base_Pay_Amount" type="xs:decimal"/>
+                                                    <xs:element name="Currency" type="xs:string"/>
+                                                </xs:sequence>
+                                            </xs:complexType>
+                                        </xs:element>
+                                    </xs:sequence>
+                                </xs:complexType>
+                            </xs:element>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+</xs:schema>

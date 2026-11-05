@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wd:Report_Data xmlns:wd="urn:com.workday/bsvc">
+    <wd:Report_Entry>
+        <wd:Employee_Status>Active</wd:Employee_Status>
+        <wd:Worker>
+            <wd:Employee_ID>EMP-10492</wd:Employee_ID>
+            <wd:Personal_Data>
+                <wd:First_Name>Alexander</wd:First_Name>
+                <wd:Last_Name>Vance</wd:Last_Name>
+                <wd:Primary_Work_Email>alexander.vance@enterprise.com</wd:Primary_Work_Email>
+            </wd:Personal_Data>
+            <wd:Position_Data>
+                <wd:Cost_Center_Reference_ID>CC_CORP_FIN_01</wd:Cost_Center_Reference_ID>
+                <wd:Company_Reference_ID>1000</wd:Company_Reference_ID>
+            </wd:Position_Data>
+            <wd:Compensation_Data>
+                <wd:Base_Pay_Amount>115000.00</wd:Base_Pay_Amount>
+                <wd:Currency>EUR</wd:Currency>
+            </wd:Compensation_Data>
+        </wd:Worker>
+    </wd:Report_Entry>
+</wd:Report_Data>
