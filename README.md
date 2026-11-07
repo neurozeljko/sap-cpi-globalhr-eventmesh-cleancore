@@ -1,164 +1,183 @@
-# Enterprise Integration Architecture: Global HR & Payroll Event-Driven Mesh to SAP S/4HANA & SAP Concur
+# Enterprise Global HR Modernization: Event-Driven Workday PECI Ingestion, XSLT 3.0 & Multicast to S/4HANA & Concur SCIM 2.0
 
 [![SAP Integration Suite](https://img.shields.io/badge/SAP%20Integration%20Suite-Cloud%20Integration-0A85EA?style=for-the-badge&logo=sap&logoColor=white)](https://www.sap.com)
-[![Clean Core](https://img.shields.io/badge/Clean%20Core-S%2F4HANA%20OData%20V4-green?style=for-the-badge&logo=sap&logoColor=white)](https://www.sap.com)
-[![SAP Concur](https://img.shields.io/badge/SAP%20Concur-SCIM%20Identity%20v4-0070F2?style=for-the-badge&logo=sap&logoColor=white)](https://developer.concur.com)
-[![Workday](https://img.shields.io/badge/Workday-PECI%20Change%20Index-F35325?style=for-the-badge&logo=workday&logoColor=white)](https://www.workday.com)
-[![Error Governance](https://img.shields.io/badge/Governance-SAP%20AIF%20Fiori-8A2BE2?style=for-the-badge&logo=sap&logoColor=white)](https://help.sap.com)
-[![Protocol](https://img.shields.io/badge/Protocol-HTTPS%20Webhook%20%7C%20AMQP-orange?style=for-the-badge)](https://oasis-open.org)
-[![Security](https://img.shields.io/badge/Security-GDPR%20%7C%20Zero--Trust%20PII-red?style=for-the-badge)](https://gdpr.eu)
+[![Event Broker](https://img.shields.io/badge/Event%20Mesh-SAP%20Advanced%20Event%20Mesh-green?style=for-the-badge)](https://www.sap.com)
+[![HR Engine](https://img.shields.io/badge/HRIS-Workday%20PECI%20%7C%20CloudEvents-blue?style=for-the-badge)](https://www.workday.com)
+[![Identity Protocol](https://img.shields.io/badge/Standard-SCIM%202.0%20(RFC%207644)-purple?style=for-the-badge)](https://datatracker.ietf.org/doc/html/rfc7644)
+[![Clean Core](https://img.shields.io/badge/Clean%20Core-S%2F4HANA%20Workforce%20OData%20V4-success?style=for-the-badge&logo=sap&logoColor=white)](https://www.sap.com)
 
 ---
 
 ## Executive Summary
 
-This enterprise integration project demonstrates the architecture, implementation, and regulatory compliance validation for real-time human capital master data replication within a global enterprise landscape. It connects **Workday HCM (Payroll Effective Change Index - PECI)** to **SAP S/4HANA Cloud** and **SAP Concur Travel & Expense**.
+Enterprise human capital management across multinational organizations requires instantaneous, synchronized propagation of worker lifecycle events (hires, role changes, cost center reassignments, terminations) across ERP financial cores and auxiliary enterprise clouds. Legacy architectures relied on unencrypted scheduled flat-file batch exports (CSV/FTP), leading to synchronization lag, orphaned travel accounts, and compliance breaches under GDPR and SOX frameworks.
 
-The architecture decouples core personnel events from ERP ledger posting schedules. By ingesting real-time change manifests via secure HTTPS webhooks (AMQP Event Mesh ready), the pipeline executes an in-memory **XSLT 3.0** canonicalization engine to strip operational XML overhead, routes data concurrently across a multi-threaded **Parallel Multicast**, transforms payloads via memory-safe **Groovy Streaming Readers** into native **S/4HANA OData V4 (`API_BUSINESS_PARTNER`)** and **SAP Concur SCIM 2.0 (RFC 7644)** endpoints, and delegates business error remediation directly to the **SAP Application Interface Framework (AIF)**.
+This architecture establishes an **Event-Driven Global HR Orchestration Mesh**:
+1. **Event-Driven PECI Ingestion:** Ingests Workday Payroll Effective Change Interface (PECI) delta streams and worker lifecycle notifications asynchronously via **SAP Advanced Event Mesh (AEM)** using AMQP 1.0 CloudEvents.
+2. **High-Performance In-Flight XSLT 3.0 Transformation:** Slices hierarchical multi-megabyte HR worker snapshots in memory, executing deterministic schema transformation into normalized intermediate HR entities without JVM heap degradation.
+3. **Decoupled Parallel Multicast Distribution:**
+   * **Branch 1 (ERP Finance & Work Agreement):** Dispatches standard S/4HANA Workforce Person and Work Assignment records via **OData V4**, adhering strictly to Clean Core boundaries.
+   * **Branch 2 (Corporate Travel & Identity):** Translates worker profiles into standardized **SCIM 2.0 (RFC 7644)** RESTful identity representations for automated provisioning and de-provisioning within **SAP Concur**.
+4. **Forensic Dead-Letter Quarantining:** Automatically quarantines partial schema rejections or target API timeouts to a persistent dead-letter queue (DLQ) with correlation IDs, preventing broken worker states.
 
 ---
 
 ## Architecture Overview
 
+![SAP CPI Global HR Event Mesh Architecture](sap-cpi-globalhr-eventmesh-runtime-architecture.png)
+
 ### High-Level Topology
 
-```
-[Workday HCM PROD (PECI Ingestion Source)]
-       │
-       │ HTTPS POST /hr/workday/peci (JSON/XML Webhook)
-       │ Client Mutual TLS / OAuth 2.0 Bearer Token (ESBMessaging.send)
-       ▼
-[SAP Integration Suite (Cloud Integration Runtime)]
- │
- ├── Security & Audit Context Layer:
- │    └─ Content Modifier (CM_PECI_Audit_Headers)
- │         ├─ CorrelationId: SAP CPI Message GUID (${header.SAP_MessageProcessingLogID})
- │         ├─ WorkerEventOrigin: Workday Inbound Tenant ID
- │         └─ OriginalPayloadBackup: Retained in Exchange Property for DLQ Governance
- │
- ├── Transformation & Canonicalization Pipeline:
- │    └─ XSLT 3.0 Engine (ParsePECI.xsl)
- │         ├─ In-memory filtering of inactive / non-hire operational entries
- │         ├─ Generates normalized canonical schema (<CanonicalHRData>)
- │         └─ Normalizes company codes and ISO-4217 currency structures
- │
- ├── Asynchronous Fan-Out & Parallel Processing:
- │    └─ Parallel Multicast (Parallel_Replication_FanOut)
- │         │
- │         ├── Branch 1: SAP S/4HANA Clean Core Enterprise Replication
- │         │    ├─ Groovy Engine (formatS4HANA.groovy - java.io.Reader streaming)
- │         │    ├─ Schema Mapping: Canonical to S/4HANA Business Partner OData V4
- │         │    └─ Target HTTP: POST /sap/opu/odata4/sap/api_businesspartner/srvd_a2x/sap/businesspartner/0001/
- │         │
- │         └── Branch 2: SAP Concur Travel & Expense Provisioning
- │              ├─ Groovy Engine (formatConcur.groovy - Zero-Heap SCIM 2.0 Builder)
- │              ├─ Schema Mapping: Canonical to RFC 7644 SCIM JSON Identity Schema
- │              └─ Target HTTP: POST /profile/identity/v4/Users
- │
- └── Exception Subprocess & Governance Layer (AIF Dead-Letter Queue):
-      ├─ Error Interceptor: Catches HTTP 4xx/5xx, timeouts, or locked Cost Centers
-      ├─ Incident Formatter: formatAIFHRError.groovy
-      └─ Outbound Routing: S/4HANA AIF HTTP Gateway (/HR_PAYROLL/ Namespace)
+```text
+[Workday Human Capital Management / PECI Integration]
+          │
+          │ CloudEvents 1.0 / AMQP 1.0
+          ▼
+[SAP Advanced Event Mesh (Topic: hr/worker/lifecycle/v1)]
+          │
+          ▼ AMQP Ingestion Adapter
+[SAP Integration Suite: IF_GlobalHR_Workday_EventMesh_to_S4HANA_SCIM]
+  │
+  ├── 1. Context & Traceability Initialization (CM_Init_HR_Context):
+  │    └─ Sets Worker Correlation GUID, Event Type (HIRE/TRANSFER/TERM), and ISO Timestamps
+  │
+  ├── 2. Transformation Engine (Transform_PECI_Worker_Envelope.xslt):
+  │    ├─ In-memory XSLT 3.0 transformation from Workday PECI XML schema
+  │    └─ Canonical normalizer: Extracts Demographics, Job Profile, Cost Center & Status
+  │
+  ├── 3. Data Sanitization & SCIM Normalizer (Sanitize_Worker_Payload.groovy):
+  │    ├─ Strips sensitive unmapped PII (Zero-Trust masking)
+  │    └─ Prepares dual payload representations (S/4HANA OData V4 and SCIM 2.0 JSON)
+  │
+  ├── 4. Parallel Multicast Router:
+  │    │
+  │    ├──► Branch A: S/4HANA Cloud (Workforce Management)
+  │    │      ├─ Maps to SAP standard API_BUSINESS_PARTNER / Workforce Person
+  │    │      └─ Outbound HTTP OData V4 Adapter (/sap/opu/odata4/sap/api_workforceperson/srvd_a2x)
+  │    │
+  │    └──► Branch B: SAP Concur (Travel & Expense Identity Mesh)
+  │           ├─ Builds SCIM 2.0 User Resource (urn:ietf:params:scim:schemas:core:2.0:User)
+  │           └─ Outbound HTTP SCIM Adapter (POST/PATCH /scim/v2/Users)
+  │
+  └── 5. Exception Subprocess (Format_HR_DLQ.groovy):
+       └─ Catches transmission or validation faults and pushes to HR DLQ repository
 ```
 
 ---
 
 ## Technical Specifications
 
-| Component | Technical Implementation | Architectural Justification |
+| Architectural Dimension | Legacy Batch CSV / SFTP Integration | Event-Driven HR Orchestration Mesh |
 | :--- | :--- | :--- |
-| **Inbound Interface** | HTTPS Webhook Adapter (`/hr/workday/peci`) | Low-latency asynchronous push ingestion eliminating nocturnal batch polling overhead and server load spikes. |
-| **Audit Context** | Content Modifier (`CM_PECI_Audit_Headers`) | Injects immutable correlation IDs, timestamps, and preserves the unparsed raw payload for regulatory traceability. |
-| **Pipeline Transform 1** | XSLT 3.0 Engine (`ParsePECI.xsl`) | Native in-memory canonicalization providing deterministic data filtering and schema decoupling between HRIS and ERP. |
-| **Parallel Fan-Out** | Parallel Multicast Pattern | Thread-isolated fan-out ensuring that downstream S/4HANA latency never blocks SAP Concur identity provisioning. |
-| **Clean Core Gatekeeper** | Groovy Engine (`formatS4HANA.groovy`) | Constructs atomic OData V4 JSON entities directly compliant with released S/4HANA Cloud Public APIs. |
-| **Outbound ERP** | HTTP Client (`api_businesspartner` OData V4) | Adheres strictly to SAP Clean Core principles using released public standard APIs, completely bypassing custom ABAP RFC/BAPI code. |
-| **Outbound Expense** | HTTP Client (`Concur Identity v4 /Users`) | Native RFC 7644 SCIM 2.0 enterprise specification matching travel authority profiles with HR cost assignment records. |
-| **Memory Optimization** | Groovy `java.io.Reader` Streaming | Prevents JVM heap exhaustion by parsing payloads as character streams rather than heavy in-memory DOM nodes. |
-| **Fault Governance** | Exception Subprocess (`formatAIFHRError.groovy`) | Direct dispatch into S/4HANA AIF Fiori cockpit, enabling business HR administrators to remediate and reprocess messages without IT tickets. |
+| **Ingestion Pattern** | Scheduled nocturnal polling (24h synchronization lag) | Near real-time event-driven streaming via SAP Event Mesh |
+| **Data Format** | Flat pipe-delimited CSV / Positional TXT | Structured Workday PECI XML & CloudEvents 1.0 |
+| **Transformation Runtime** | Heavy Java-based external ETL server | Native in-memory XSLT 3.0 & Groovy runtime |
+| **Downstream Propagation** | Sequential, brittle point-to-point scripts | Non-blocking parallel multicast to ERP and Travel clouds |
+| **Identity Standard** | Proprietary legacy user-management APIs | Strict RFC 7644 SCIM 2.0 RESTful schemas |
+| **ERP Extensibility** | Invasive custom PA0001/PA0002 ABAP infotype code | 100% Clean Core compliant S/4HANA OData V4 standard |
 
 ---
 
-## Enterprise HR Governance & Regulatory Framework (GDPR / Clean Core / AIF)
+## Target Payloads
 
-Operating global enterprise workforce automation requires adherence to strict architectural, data protection, and governance principles:
+### 1. S/4HANA Workforce Person OData V4 Entity
+```json
+{
+  "WorkforcePersonExternalID": "EMP-994102",
+  "BusinessPartnerRole": "BBP005",
+  "Profile": {
+    "FirstName": "Alexander",
+    "LastName": "von Humboldt",
+    "Email": "alexander.humboldt@enterprise.com",
+    "Language": "EN"
+  },
+  "WorkAssignment": {
+    "WorkAssignmentExternalID": "WA-994102-1",
+    "JobTitle": "Senior Enterprise Architect",
+    "CostCenter": "CC-DE-1010-ENG",
+    "StartDate": "2026-11-01",
+    "Status": "ACTIVE"
+  }
+}
+```
 
-1. **Zero-Trust PII & In-Memory Encryption (GDPR Compliance):**
-   * Employee personal identifiable information (PII) and compensation figures are parsed strictly in volatile JVM memory buffers.
-   * Sensitive values are never persisted in unencrypted plain-text execution trace logs (MPL).
-   * Temporary payload snapshots stored in exchange properties are scoped strictly to the execution exchange lifecycle and destroyed upon route completion.
-
-2. **Clean Core Compliance (Zero S/4HANA Modifications):**
-   * Implements direct consumption of SAP standard **OData V4 (`API_BUSINESS_PARTNER`)** services.
-   * Eliminates brittle point-to-point batch files (ABAP custom reports, custom Z-tables, flat file IDocs) in favor of modern API-led connectivity.
-   * Ensures seamless S/4HANA quarterly and annual cloud upgrades without regressions in the integration layer.
-
-3. **Audit Logging & ALCOA+ Traceability:**
-   * Custom audit properties attached to the transaction context:
-     * `PECI_CorrelationId`: SAP CPI Message GUID.
-     * `PECI_WorkdayEventId`: Upstream Workday transaction UUID.
-     * `PECI_ExecutionTimestamp`: UTC ISO-8601 transmission stamp.
-     * `PECI_ProcessingStatus`: Fan-out dispatch verification flag.
-
-4. **Dead-Letter Resiliency & Business-Led Error Resolution (SAP AIF):**
-   * If a Cost Center is temporarily locked in S/4HANA Finance, the pipeline does not stall integration queues.
-   * The **Exception Subprocess** catches the runtime exception, builds an enriched incident envelope containing error stacks and the original payload, and posts it to S/4HANA AIF under the `/HR_PAYROLL/` namespace.
-   * Functional HR controllers resolve master data discrepancies in SAP Fiori and re-trigger processing directly from the AIF monitor without IT intervention.
-
----
-
-## Message Mapping Details (Workday PECI to S/4HANA & Concur)
-
-| Workday PECI XML XPath | Target S/4HANA OData V4 Field | Target Concur SCIM Field | Business Semantic |
-| :--- | :--- | :--- | :--- |
-| `wd:Worker/wd:Employee_ID` | `BusinessPartner` | `urn:...:enterprise:2.0:User:employeeNumber` | Global unique worker identifier |
-| `wd:Personal_Data/wd:First_Name` | `FirstName` | `name.givenName` | Worker legal given name |
-| `wd:Personal_Data/wd:Last_Name` | `LastName` | `name.familyName` | Worker legal family name |
-| `wd:Personal_Data/wd:Primary_Work_Email` | `SearchTerm1` | `userName`, `emails[type='work'].value` | SSO enterprise identity and user login |
-| `wd:Position_Data/wd:Cost_Center_Reference_ID` | `to_Employment/CostCenter` | `urn:...:enterprise:2.0:User:costCenter` | Controlling cost center allocation |
-| `wd:Position_Data/wd:Company_Reference_ID` | `to_Employment/CompanyCode` | `N/A` | Legal entity and general ledger boundary |
-| `wd:Compensation_Data/wd:Base_Pay_Amount` | `to_Employment/BaseSalary` | `N/A` | Base compensation for payroll accounting |
-| `wd:Compensation_Data/wd:Currency` | `to_Employment/Currency` | `N/A` | ISO currency code for financial valuation |
-| `wd:Employee_Status` (`Active` / `Hire`) | `to_Employment/EmploymentStatus = '3'` | `active = true` | Workforce validity and access enablement |
+### 2. SAP Concur SCIM 2.0 User Representation
+```json
+{
+  "schemas": [
+    "urn:ietf:params:scim:schemas:core:2.0:User",
+    "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+  ],
+  "userName": "alexander.humboldt@enterprise.com",
+  "name": {
+    "givenName": "Alexander",
+    "familyName": "von Humboldt"
+  },
+  "active": true,
+  "emails": [
+    {
+      "value": "alexander.humboldt@enterprise.com",
+      "type": "work",
+      "primary": true
+    }
+  ],
+  "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": {
+    "employeeNumber": "EMP-994102",
+    "costCenter": "CC-DE-1010-ENG",
+    "organization": "Enterprise Architecture & Innovation"
+  }
+}
+```
 
 ---
 
 ## Repository Structure
 
-```
-├── README.md                                  # Comprehensive architectural & governance documentation
-├── ADR-001-Workday-EventMesh-Architecture.md  # Architecture Decision Record (Event-Driven vs Batch)
-├── Workday_PECI_to_ERP_Router.jar            # Production OSGi runtime bundle export
-├── ParsePECI.xsl                              # High-performance XSLT 3.0 canonical mapping engine
-├── formatS4HANA.groovy                        # Streaming Groovy builder for S/4HANA OData V4 Business Partner
-├── formatConcur.groovy                        # Streaming Groovy builder for SAP Concur SCIM 2.0 User
-├── formatAIFHRError.groovy                    # Exception handler generating SAP AIF incident payloads
-├── Workday_PECI_Sample_Input.xml              # Valid enterprise Workday PECI XML test event
-├── Workday_PECI_Schema.xsd                    # Workday PECI input validation schema
-├── Concur_SCIM_User_Target.json               # RFC 7644 SCIM 2.0 JSON validation schema
-└── .gitignore                                 # Standard Git exclusions for enterprise projects
+```text
+├── README.md                                             # Enterprise architecture & operations runbook
+├── sap-cpi-globalhr-eventmesh-runtime-architecture.png  # Integration flow runtime topology diagram
+├── ADR-008-Event-Driven-HR-Decoupled-Multicast.md       # Architecture Decision Record
+├── IF_GlobalHR_Workday_EventMesh_to_S4HANA_SCIM.zip      # Production iFlow runtime bundle export
+├── cpi/
+│   ├── mappings/
+│   │   └── Transform_PECI_Worker_Envelope.xslt          # In-flight XSLT 3.0 transformation engine
+│   └── scripts/
+│       ├── Sanitize_Worker_Payload.groovy                # PII masking & dual payload builder
+│       └── Format_HR_DLQ.groovy                          # HR exception dead-letter handler
+├── tests/
+│   ├── sample_valid_peci_event.xml                       # Compliant Workday PECI worker event
+│   └── sample_malformed_worker_event.xml                 # Invalid event payload for DLQ trigger
+└── .gitignore                                            # Git exclusion rules
 ```
 
 ---
 
-## Deployment & Verification Runbook
+## Verification & Deployment Runbook
 
-1. **Deploy Artifact:** Deploy `Workday_PECI_to_ERP_Router.jar` onto the SAP Integration Suite tenant runtime via **Manage Integration Content**.
-2. **Endpoint Exposure:** Confirm the runtime status resolves to **Started** with exposed endpoint:
-   `https://<tenant-runtime>.cfapps.<region>.hana.ondemand.com/http/hr/workday/peci`
-3. **Execution Verification (cURL):**
-   ```bash
-   curl -X POST \
-     'https://<tenant-runtime>.cfapps.<region>[.hana.ondemand.com/http/hr/workday/peci](https://.hana.ondemand.com/http/hr/workday/peci)' \
-     -H 'Content-Type: application/xml' \
-     -H 'Authorization: Bearer <BTP_OAUTH_TOKEN>' \
-     --data-binary '@Workday_PECI_Sample_Input.xml'
-   ```
-4. **Monitoring & Trace Inspection:**
-   * Navigate to **Monitor Message Processing** in SAP Integration Suite.
-   * Verify non-blocking parallel branch completion.
-   * Validate outbound payloads against S/4HANA OData V4 and Concur SCIM 2.0 schema targets.
-   * In case of simulated backend error, inspect incident in S/4HANA Fiori AIF interface `/HR_PAYROLL/`.
+### 1. Inbound Event Mesh Trigger Verification
+Confirm the message queue subscriber status in **Monitor** ──► **Manage Integration Content**:
+```text
+Artifact: IF_GlobalHR_Workday_EventMesh_to_S4HANA_SCIM
+State: Started
+Adapter: AMQP (Connected to SAP Advanced Event Mesh)
+```
+
+### 2. Dispatched cURL Test (Simulated Event Ingestion)
+Transmit a simulated Workday PECI CloudEvent to the test webhook endpoint:
+
+```bash
+curl -X POST \
+  'https://<tenant-runtime>.cfapps.<region>[.hana.ondemand.com/http/hr/worker/peci/sync](https://.hana.ondemand.com/http/hr/worker/peci/sync)' \
+  -H 'Content-Type: application/xml' \
+  -H 'Authorization: Bearer <BTP_OAUTH_TOKEN>' \
+  -H 'X-CloudEvents-Type: com.workday.peci.worker.updated.v1' \
+  --data-binary '@tests/sample_valid_peci_event.xml'
+```
+
+### 3. Monitoring Trace
+* Inspect execution under **Monitor Message Processing**.
+* Confirm parallel execution across both multicast branches (`Branch_S4HANA` and `Branch_Concur_SCIM`).
+* Verify properties `Worker_ID = EMP-994102`, `S4HANA_HTTP_Status = 201`, and `SCIM_HTTP_Status = 200`.
 
 ---
 
